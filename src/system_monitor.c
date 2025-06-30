@@ -16,6 +16,9 @@ static void alloc_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* b
     buf->len = suggested_size;
 }
 
+// 读取数据回调
+static void system_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf);
+
 // Unix socket 连接回调
 static void system_connect_cb(uv_connect_t* req, int status) {
     system_monitor_t *monitor = (system_monitor_t*)req->data;
@@ -71,11 +74,7 @@ int system_monitor_init(system_monitor_t *monitor, uv_loop_t *loop) {
     uv_connect_t *connect_req = malloc(sizeof(uv_connect_t));
     connect_req->data = monitor;
     
-    if (uv_pipe_connect(connect_req, &monitor->socket, monitor->socket_path, system_connect_cb) != 0) {
-        printf("Failed to connect to system monitor socket\n");
-        free(connect_req);
-        return -1;
-    }
+    uv_pipe_connect(connect_req, &monitor->socket, monitor->socket_path, system_connect_cb);
     
     return 0;
 }

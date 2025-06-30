@@ -15,21 +15,6 @@ static void alloc_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* b
     buf->base = malloc(suggested_size);
     buf->len = suggested_size;
 }
-
-// Unix socket 连接回调
-static void wifi_connect_cb(uv_connect_t* req, int status) {
-    wifi_monitor_t *monitor = (wifi_monitor_t*)req->data;
-    if (status == 0) {
-        monitor->connected = 1;
-        printf("WiFi monitor connected to %s\n", monitor->socket_path);
-        // 开始读取数据
-        uv_read_start((uv_stream_t*)&monitor->socket, alloc_buffer, wifi_read_cb);
-    } else {
-        printf("WiFi monitor connection failed: %s\n", uv_strerror(status));
-    }
-    free(req);
-}
-
 // 读取数据回调
 static void wifi_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf) {
     wifi_monitor_t *monitor = (wifi_monitor_t*)stream->data;
@@ -52,6 +37,21 @@ static void wifi_read_cb(uv_stream_t* stream, ssize_t nread, const uv_buf_t* buf
     free(buf->base);
 }
 
+// Unix socket 连接回调
+static void wifi_connect_cb(uv_connect_t* req, int status) {
+    wifi_monitor_t *monitor = (wifi_monitor_t*)req->data;
+    if (status == 0) {
+        monitor->connected = 1;
+        printf("WiFi monitor connected to %s\n", monitor->socket_path);
+        // 开始读取数据
+        uv_read_start((uv_stream_t*)&monitor->socket, alloc_buffer, wifi_read_cb);
+    } else {
+        printf("WiFi monitor connection failed: %s\n", uv_strerror(status));
+    }
+    free(req);
+}
+
+
 // 初始化 WiFi 监控
 int wifi_monitor_init(wifi_monitor_t *monitor, uv_loop_t *loop) {
     monitor->loop = loop;
@@ -71,11 +71,7 @@ int wifi_monitor_init(wifi_monitor_t *monitor, uv_loop_t *loop) {
     uv_connect_t *connect_req = malloc(sizeof(uv_connect_t));
     connect_req->data = monitor;
     
-    if (uv_pipe_connect(connect_req, &monitor->socket, monitor->socket_path, wifi_connect_cb) != 0) {
-        printf("Failed to connect to WiFi monitor socket\n");
-        free(connect_req);
-        return -1;
-    }
+    uv_pipe_connect(connect_req, &monitor->socket, monitor->socket_path, wifi_connect_cb);
     
     return 0;
 }
