@@ -9,13 +9,13 @@ Simple Mesh的目的：
 * WIFI/LAN backhaul 切换
 * 同步配置
 * 同步的配置可以在luci上自定义
-* 基于hostapd的漫游
+* 基于hostapd的漫游，支持通过ubus 控制手机漫游
 * 客户端/mesh节点管理
 #### Simple Mesh的代码架构
 
 ```mermaid
 graph TB
-    subgraph "mesh_controller"
+    subgraph "mesh_controller/agent"
         A[main.c] --> B[mqtt_module]
         A --> C[wifi_monitor]
         A --> D[system_monitor]
@@ -23,6 +23,6 @@ graph TB
     end
     
     B --> E[建立和管理Mesh网络] 
-    F[接收 hostapd/wifi驱动事件 管理wifi部分] --> C
-    G[接收/更新路由器配置 获取路由器其他信息] --> D
+    C --> F[接收 hostapd/wifi驱动事件 管理wifi部分] 
+    D --> G[接收/更新路由器配置 获取路由器其他信息] 
 ```
