@@ -14,7 +14,7 @@ define Package/simple_mesh
   SECTION:=net
   CATEGORY:=Network
   TITLE:=Simple Mesh Network Implementation (MQTT-based)
-  DEPENDS:=+libc +libubox +libubus +libblobmsg-json +libjson-c +libmosquitto +libssl +libcrypto +libuv
+  DEPENDS:=+libc +libubox +libubus +libblobmsg-json +libjson-c +libmosquitto +libuv
   PKG_FLAGS:=nonshared
 endef
 
@@ -38,23 +38,8 @@ endef
 
 define Package/simple_mesh/install
 	$(INSTALL_DIR) $(1)/usr/bin
-	$(INSTALL_BIN) $(PKG_BUILD_DIR)/mesh_controller $(1)/usr/bin/
-	
-	$(INSTALL_DIR) $(1)/etc/init.d
-	$(INSTALL_BIN) ./files/wifi-mesh.init $(1)/etc/init.d/wifi-mesh
-	
-	$(INSTALL_DIR) $(1)/etc/config
-	$(INSTALL_CONF) ./files/wifi-mesh.config $(1)/etc/config/wifi-mesh
-	
-	$(INSTALL_DIR) $(1)/etc/hotplug.d/iface
-	$(INSTALL_DATA) ./files/20-wifi-mesh $(1)/etc/hotplug.d/iface/
-	
-	$(INSTALL_DIR) $(1)/etc/ssl/certs
-	$(INSTALL_DATA) ./files/ca.crt $(1)/etc/ssl/certs/
-	
-	$(INSTALL_DIR) $(1)/etc/ssl/private
-	$(INSTALL_DATA) ./files/client.crt $(1)/etc/ssl/private/
-	$(INSTALL_DATA) ./files/client.key $(1)/etc/ssl/private/
+	$(INSTALL_BIN) $(PKG_BUILD_DIR)/simple_mesh $(1)/usr/bin/
+
 endef
 
 $(eval $(call BuildPackage,simple_mesh)) 

@@ -1,0 +1,17 @@
+CC = gcc
+CFLAGS = -Wall -Wextra -std=c99 -I.
+TARGET = test_topics
+SOURCE = test_topics.c
+
+.PHONY: all clean test
+
+all: $(TARGET)
+
+$(TARGET): $(SOURCE)
+	$(CC) $(CFLAGS) -o $@ $<
+
+test: $(TARGET)
+	./$(TARGET)
+
+clean:
+	rm -f $(TARGET) 

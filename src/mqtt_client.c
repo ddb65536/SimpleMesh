@@ -1,4 +1,5 @@
 #include "mqtt_client.h"
+#include "mqtt_topics.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -28,8 +29,14 @@ static void mqtt_connect_cb(struct mosquitto *mosq, void *userdata, int rc) {
         client->connected = 1;
         printf("MQTT connected to %s:%d\n", client->broker_host, client->broker_port);
         // 订阅相关主题
-        mosquitto_subscribe(mosq, NULL, "mesh/+/status", 1);
-        mosquitto_subscribe(mosq, NULL, "mesh/+/command", 1);
+        if (client->mode == MODE_CONTROLLER) {
+            // Controller监听登录和发现主题
+            mosquitto_subscribe(mosq, NULL, MESH_TOPIC_LOGIN, 1);
+            mosquitto_subscribe(mosq, NULL, MESH_TOPIC_DISCOVER, 1);
+        } else if (client->mode == MODE_AGENT) {
+            // Agent监听控制器通知主题
+            mosquitto_subscribe(mosq, NULL, MESH_TOPIC_CONTROLLER_NOTIFY, 1);
+        }
     } else {
         printf("MQTT connection failed, rc=%d\n", rc);
     }
@@ -46,8 +53,40 @@ static void mqtt_message_cb(struct mosquitto *mosq, void *userdata,
     }
     
     // 处理接收到的消息
-    if (strstr(msg->topic, "mesh/") == msg->topic) {
-        printf("Received mesh message: %.*s\n", msg->payloadlen, (char*)msg->payload);
+    if (strstr(msg->topic, "SIMPLE_MESH") == msg->topic) {
+        printf("Received SimpleMesh message on topic '%s': %.*s\n", 
+               msg->topic, msg->payloadlen, (char*)msg->payload);
+        
+        // Controller收到discover消息后回复
+        if (client->mode == MODE_CONTROLLER && 
+            strcmp(msg->topic, MESH_TOPIC_DISCOVER) == 0) {
+            
+            // 解析discover消息中的node_id
+            char node_id[64] = {0};
+            // 简单解析JSON获取node_id（这里简化处理）
+            char *node_id_start = strstr((char*)msg->payload, "\"node_id\":\"");
+            if (node_id_start) {
+                node_id_start += 11; // 跳过 "node_id":"
+                char *node_id_end = strchr(node_id_start, '"');
+                if (node_id_end) {
+                    int len = node_id_end - node_id_start;
+                    if (len < sizeof(node_id)) {
+                        strncpy(node_id, node_id_start, len);
+                        node_id[len] = '\0';
+                    }
+                }
+            }
+            
+            // 发送controller通知回复
+            char reply_payload[256];
+            snprintf(reply_payload, sizeof(reply_payload), 
+                    "{\"controller_id\":\"%s\",\"timestamp\":%ld,\"action\":\"notify\",\"target_node\":\"%s\"}", 
+                    client->client_id, time(NULL), node_id);
+            
+            mosquitto_publish(client->mosq, NULL, MESH_TOPIC_CONTROLLER_NOTIFY, 
+                             strlen(reply_payload), reply_payload, 1, false);
+            printf("Controller replied to discover from node: %s\n", node_id);
+        }
     }
 }
 
@@ -57,22 +96,54 @@ static void heartbeat_timer_cb(uv_timer_t* handle) {
     if (client->connected) {
         // 发送心跳消息
         char payload[128];
-        snprintf(payload, sizeof(payload), "{\"node_id\":\"%s\",\"timestamp\":%ld}", 
+        snprintf(payload, sizeof(payload), "{\"node_id\":\"%s\",\"timestamp\":%ld,\"mode\":\"%s\"}", 
+                client->client_id, time(NULL), 
+                (client->mode == MODE_CONTROLLER) ? "controller" : "agent");
+        
+        // 根据模式发送到不同的topic
+        if (client->mode == MODE_CONTROLLER) {
+            mosquitto_publish(client->mosq, NULL, MESH_TOPIC_CONTROLLER_NOTIFY, 
+                             strlen(payload), payload, 1, false);
+        } else if (client->mode == MODE_AGENT) {
+            mosquitto_publish(client->mosq, NULL, MESH_TOPIC_DISCOVER, 
+                             strlen(payload), payload, 1, false);
+        }
+    }
+}
+
+// Discover定时器回调
+static void discover_timer_cb(uv_timer_t* handle) {
+    mqtt_client_t *client = (mqtt_client_t*)handle->data;
+    if (client->connected && client->mode == MODE_AGENT) {
+        // Agent周期性发送discover消息
+        char payload[128];
+        snprintf(payload, sizeof(payload), "{\"node_id\":\"%s\",\"timestamp\":%ld,\"action\":\"discover\"}", 
                 client->client_id, time(NULL));
-        mosquitto_publish(client->mosq, NULL, "mesh/heartbeat", 
+        
+        mosquitto_publish(client->mosq, NULL, MESH_TOPIC_DISCOVER, 
                          strlen(payload), payload, 1, false);
+        printf("Agent sent discover message\n");
     }
 }
 
 // 初始化 MQTT 客户端
-int mqtt_client_init(mqtt_client_t *client, uv_loop_t *loop) {
+int mqtt_client_init(mqtt_client_t *client, uv_loop_t *loop, mesh_mode_t mode) {
     client->loop = loop;
     client->connected = 0;
+    client->mode = mode;
     
     // 设置默认配置
     strcpy(client->broker_host, "127.0.0.1");
     client->broker_port = 1883;
-    strcpy(client->client_id, "mesh_controller");
+    
+    // 根据模式设置client_id
+    if (mode == MODE_CONTROLLER) {
+        strcpy(client->client_id, "mesh_controller");
+    } else if (mode == MODE_AGENT) {
+        strcpy(client->client_id, "mesh_agent");
+    } else {
+        strcpy(client->client_id, "mesh_unknown");
+    }
     
     // 初始化 libmosquitto
     mosquitto_lib_init();
@@ -115,6 +186,20 @@ int mqtt_client_init(mqtt_client_t *client, uv_loop_t *loop) {
         return -1;
     }
     
+    // 启动discover定时器（仅Agent模式）
+    if (uv_timer_init(loop, &client->discover_timer) != 0) {
+        printf("Failed to init discover timer\n");
+        return -1;
+    }
+    client->discover_timer.data = client;
+    if (client->mode == MODE_AGENT) {
+        // Agent每10秒发送一次discover
+        if (uv_timer_start(&client->discover_timer, discover_timer_cb, 10000, 10000) != 0) {
+            printf("Failed to start discover timer\n");
+            return -1;
+        }
+    }
+    
     return 0;
 }
 
@@ -123,6 +208,7 @@ void mqtt_client_cleanup(mqtt_client_t *client) {
     if (client->mosq) {
         uv_poll_stop(&client->mqtt_poll);
         uv_timer_stop(&client->heartbeat_timer);
+        uv_timer_stop(&client->discover_timer);
         mosquitto_disconnect(client->mosq);
         mosquitto_destroy(client->mosq);
     }
