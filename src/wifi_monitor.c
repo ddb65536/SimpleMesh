@@ -10,6 +10,11 @@
 // 全局 WiFi 数据回调函数
 static void (*g_wifi_callback)(const char *data, int len) = NULL;
 
+// 默认回调函数
+static void default_wifi_callback(const char *data, int len) {
+    printf("[WiFiMonitor] (default) data: %.*s\n", len, data);
+}
+
 // 内存分配回调
 static void alloc_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
     buf->base = malloc(suggested_size);
@@ -86,7 +91,11 @@ void wifi_monitor_cleanup(wifi_monitor_t *monitor) {
 
 // 设置 WiFi 数据回调
 void wifi_monitor_set_callback(void (*callback)(const char *data, int len)) {
-    g_wifi_callback = callback;
+    if (callback) {
+        g_wifi_callback = callback;
+    } else {
+        g_wifi_callback = default_wifi_callback;
+    }
 }
 
 // 获取 WiFi 状态（简化实现）

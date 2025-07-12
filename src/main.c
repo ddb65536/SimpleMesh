@@ -3,10 +3,11 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
-#include "mqtt_client.h"
 #include "mqtt_topics.h"
 #include "wifi_monitor.h"
 #include "system_monitor.h"
+#include "mqtt_controller.h"
+#include "mqtt_agent.h"
 
 /*
 main的入参要支持设置为controler或者agent
@@ -19,7 +20,7 @@ main的入参要支持设置为controler或者agent
 
 // 全局变量
 uv_loop_t *loop;
-mqtt_client_t mqtt_client;
+
 wifi_monitor_t wifi_monitor;
 system_monitor_t system_monitor;
 mesh_mode_t current_mode = MODE_UNKNOWN;
@@ -79,46 +80,43 @@ int parse_arguments(int argc, char *argv[]) {
     return 0;
 }
 
+// WiFi数据回调
+static void main_wifi_data_cb(const char *data, int len) {
+    printf("[Main] WiFi monitor data: %.*s\n", len, data);
+}
+// 系统数据回调
+static void main_system_data_cb(const char *data, int len) {
+    printf("[Main] System monitor data: %.*s\n", len, data);
+}
+
 // 主程序入口
 int main(int argc, char *argv[]) {
     // 解析命令行参数
     if (parse_arguments(argc, argv) != 0) {
         return 1;
     }
-    
     // 初始化 libuv 事件循环
     loop = uv_default_loop();
-    
-    // 初始化各模块，传递模式参数
-    if (mqtt_client_init(&mqtt_client, loop, current_mode) != 0) {
-        printf("Failed to init MQTT client\n");
-        return 1;
-    }
-    
-    if (wifi_monitor_init(&wifi_monitor, loop) != 0) {
-        printf("Failed to init WiFi monitor\n");
-        return 1;
-    }
-    
-    if (system_monitor_init(&system_monitor, loop) != 0) {
-        printf("Failed to init system monitor\n");
-        return 1;
-    }
-    
-    // 根据模式打印启动信息
+    // 初始化WiFi和系统监控
+    wifi_monitor_init(&wifi_monitor, loop);
+    wifi_monitor_set_callback(main_wifi_data_cb);
+    system_monitor_init(&system_monitor, loop);
+    system_monitor_set_callback(main_system_data_cb);
+    // 根据模式初始化对应模块
     if (current_mode == MODE_CONTROLLER) {
+        if (mqtt_controller_init(loop) != 0) {
+            printf("Failed to init MQTT controller\n");
+            return 1;
+        }
         printf("Mesh controller started\n");
     } else if (current_mode == MODE_AGENT) {
+        if (mqtt_agent_init(loop) != 0) {
+            printf("Failed to init MQTT agent\n");
+            return 1;
+        }
         printf("Mesh agent started\n");
     }
-    
     // 启动事件循环
     uv_run(loop, UV_RUN_DEFAULT);
-    
-    // 清理资源
-    mqtt_client_cleanup(&mqtt_client);
-    wifi_monitor_cleanup(&wifi_monitor);
-    system_monitor_cleanup(&system_monitor);
-    
     return 0;
 } 

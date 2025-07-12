@@ -10,6 +10,11 @@
 // 全局系统数据回调函数
 static void (*g_system_callback)(const char *data, int len) = NULL;
 
+// 默认回调函数
+static void default_system_callback(const char *data, int len) {
+    printf("[SystemMonitor] (default) data: %.*s\n", len, data);
+}
+
 // 内存分配回调
 static void alloc_buffer(uv_handle_t* handle, size_t suggested_size, uv_buf_t* buf) {
     buf->base = malloc(suggested_size);
@@ -89,7 +94,11 @@ void system_monitor_cleanup(system_monitor_t *monitor) {
 
 // 设置系统数据回调
 void system_monitor_set_callback(void (*callback)(const char *data, int len)) {
-    g_system_callback = callback;
+    if (callback) {
+        g_system_callback = callback;
+    } else {
+        g_system_callback = default_system_callback;
+    }
 }
 
 // 获取系统配置（简化实现）
