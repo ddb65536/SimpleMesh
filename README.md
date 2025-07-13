@@ -12,108 +12,98 @@ Simple Mesh的目的：
 * 基于hostapd的漫游，支持通过ubus 控制手机漫游
 * 客户端/mesh节点管理
 
-### 自定义同步参数配置
+## 参数同步与批量下发机制
 
-SimpleMesh支持通过UCI配置文件自定义需要同步的参数。用户可以通过修改 `/etc/config/simple_mesh` 文件来定义获取和设置参数的shell命令。
+本项目通过配置文件和脚本，实现了需要同步的参数的获取，和同步数据后，生效配置。只需在 `/etc/config/simple_mesh` 中定义参数，无需修改脚本，即可实现灵活扩展。
 
-#### 配置文件结构
+---
+
+### 1. 配置文件格式（/etc/config/simple_mesh）
+
+每个可同步参数用 `data_cmd` section 定义。例如：
 
 ```bash
-# 主配置
-config simple_mesh 'main'
-	option enabled '1'
-	option mqtt_broker '127.0.0.1'
-	option mqtt_port '1883'
-	option mqtt_client_id 'mesh_controller'
-	option mode 'controller'
-
-# 参数配置示例
-config data_cmd 'wifi_ssid'
-	option name 'WiFi SSID'
+config data_cmd 'wifi_2g_ssid'
 	option description '获取和设置WiFi SSID'
-	option cmd_get 'uci get wireless.wlan1.ssid'
-	option cmd_set 'uci set wireless.wlan1.ssid=%s && uci commit wireless && wifi reload'
+	option cmd_get 'uci get wireless.wlan0.ssid'
+	option cmd_set 'uci set wireless.wlan0.ssid=$sync_data'
 
-config data_cmd 'wifi_password'
-	option name 'WiFi Password'
+config data_cmd 'wifi_2g_password'
 	option description '获取和设置WiFi密码'
-	option cmd_get 'uci get wireless.wlan1.key'
-	option cmd_set 'uci set wireless.wlan1.key=%s && uci commit wireless && wifi reload'
+	option cmd_get 'uci get wireless.wlan0.key'
+	option cmd_set 'uci set wireless.wlan0.key=$sync_data'
 ```
 
-#### 配置选项说明
+- **section name**（如 `wifi_2g_ssid`）即参数标识
+- **cmd_get**：获取参数值的命令
+- **cmd_set**：设置参数值的命令，`$sync_data` 为占位符
 
-- **name**: 参数名称，用于显示和识别
-- **description**: 参数描述，说明参数的用途
-- **cmd_get**: 获取参数值的shell命令
-- **cmd_set**: 设置参数值的shell命令（%s为参数值占位符）
+---
 
-#### 自定义参数示例
+### 2. 获取所有可同步参数（get_sync_data.sh）
 
-**1. UCI配置参数**
+该脚本会自动遍历所有 type 为 `data_cmd` 的 section，执行其 `cmd_get`，并输出如下 JSON：
+
+```json
+{
+  "sync_data": {
+    "wifi_2g_ssid": "当前SSID",
+    "wifi_2g_password": "当前密码",
+    ...
+  }
+}
+```
+
+**用法示例：**
+
+```sh
+./get_sync_data.sh
+```
+
+---
+
+### 3. 批量设置参数（apply_sync_data.sh）
+
+该脚本接收一个 JSON 字符串（或文件），自动遍历 `sync_data` 下的每个 key，查找对应的 `cmd_set`，用 value 替换 `$sync_data` 并执行，实现批量参数下发。
+
+**用法示例：**
+
+```sh
+./apply_sync_data.sh '{"sync_data": {"wifi_2g_ssid": "newssid", "wifi_2g_password": "newpass"}}'
+```
+
+---
+
+### 4. 自定义参数示例
+
+**添加自定义参数只需在配置文件中增加一段：**
+
 ```bash
 config data_cmd 'lan_ip'
-	option name 'LAN IP Address'
-	option description '获取和设置LAN IP地址'
+	option description '获取和设置LAN IP'
 	option cmd_get 'uci get network.lan.ipaddr'
-	option cmd_set 'uci set network.lan.ipaddr=%s && uci commit network && /etc/init.d/network restart'
+	option cmd_set 'uci set network.lan.ipaddr=$sync_data && uci commit network && /etc/init.d/network restart'
 ```
 
-**2. 系统文件参数**
-```bash
-config data_cmd 'hostname'
-	option name 'Hostname'
-	option description '获取和设置主机名'
-	option cmd_get 'cat /proc/sys/kernel/hostname'
-	option cmd_set 'echo %s > /proc/sys/kernel/hostname'
-```
+**即可自动支持同步和批量下发，无需修改脚本。**
 
-**3. 自定义配置文件参数**
-```bash
-config data_cmd 'custom_param'
-	option name 'Custom Parameter'
-	option description '自定义参数'
-	option cmd_get 'cat /etc/config/custom_config | grep param1 | cut -d"=" -f2'
-	option cmd_set 'sed -i "s/param1=.*/param1=%s/" /etc/config/custom_config'
-```
+---
 
-**4. 服务状态参数**
-```bash
-config data_cmd 'ssh_enabled'
-	option name 'SSH Enabled'
-	option description '获取和设置SSH服务状态'
-	option cmd_get 'uci get dropbear.@dropbear[0].enabled'
-	option cmd_set 'uci set dropbear.@dropbear[0].enabled=%s && uci commit dropbear && /etc/init.d/dropbear restart'
-```
+### 5. 常见问题
 
-#### 使用方法
+- **cmd_set** 里的 `$sync_data` 会被自动替换为 JSON 里的 value
+- 支持任意 shell 命令，只要能通过 shell 执行即可
+- 建议所有参数都用 `data_cmd` section 统一管理
 
-1. **编辑配置文件**
-   ```bash
-   vi /etc/config/simple_mesh
-   ```
+---
 
-2. **添加自定义参数**
-   ```bash
-   config data_cmd 'your_param'
-   	option name 'Your Parameter'
-   	option description 'Your parameter description'
-   	option cmd_get 'your_get_command'
-   	option cmd_set 'your_set_command %s'
-   ```
+## 总结
 
-3. **重启服务**
-   ```bash
-   /etc/init.d/simple_mesh restart
-   ```
+- **参数定义**：只需在 `/etc/config/simple_mesh` 里添加 `data_cmd` 段
+- **获取所有参数**：`get_sync_data.sh` 自动输出 JSON
+- **批量设置参数**：`apply_sync_data.sh` 自动解析 JSON 并执行设置命令
 
-#### 注意事项
-
-- `cmd_get` 命令应该只输出参数值，不要包含其他信息
-- `cmd_set` 命令中的 `%s` 会被实际参数值替换
-- 确保命令有足够的权限执行
-- 建议在设置命令中包含必要的重启或重载操作
-- 复杂的命令可以使用 `&&` 连接多个操作
+这样即可实现灵活、自动化的参数同步与批量下发，无需手动维护脚本内容！
 
 #### Simple Mesh的代码架构
 
