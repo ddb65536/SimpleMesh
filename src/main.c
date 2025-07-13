@@ -3,11 +3,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <unistd.h>
+#include "mesh_core.h"
 #include "mqtt_topics.h"
-#include "wifi_monitor.h"
-#include "system_monitor.h"
-#include "mqtt_controller.h"
-#include "mqtt_agent.h"
 
 /*
 main的入参要支持设置为controler或者agent
@@ -17,13 +14,6 @@ main的入参要支持设置为controler或者agent
 
 
 */
-
-// 全局变量
-uv_loop_t *loop;
-
-wifi_monitor_t wifi_monitor;
-system_monitor_t system_monitor;
-mesh_mode_t current_mode = MODE_UNKNOWN;
 
 // 打印使用说明
 void print_usage(const char *program_name) {
@@ -44,16 +34,16 @@ void print_version() {
 }
 
 // 解析命令行参数
-int parse_arguments(int argc, char *argv[]) {
+int parse_arguments(int argc, char *argv[], mesh_mode_t *mode) {
     int opt;
     
     while ((opt = getopt(argc, argv, "m:hv")) != -1) {
         switch (opt) {
             case 'm':
                 if (strcmp(optarg, "controller") == 0) {
-                    current_mode = MODE_CONTROLLER;
+                    *mode = MODE_CONTROLLER;
                 } else if (strcmp(optarg, "agent") == 0) {
-                    current_mode = MODE_AGENT;
+                    *mode = MODE_AGENT;
                 } else {
                     printf("Error: Invalid mode '%s'. Use 'controller' or 'agent'\n", optarg);
                     return -1;
@@ -71,7 +61,7 @@ int parse_arguments(int argc, char *argv[]) {
         }
     }
     
-    if (current_mode == MODE_UNKNOWN) {
+    if (*mode == MODE_UNKNOWN) {
         printf("Error: Mode not specified. Use -m controller or -m agent\n");
         print_usage(argv[0]);
         return -1;
@@ -84,6 +74,7 @@ int parse_arguments(int argc, char *argv[]) {
 static void main_wifi_data_cb(const char *data, int len) {
     printf("[Main] WiFi monitor data: %.*s\n", len, data);
 }
+
 // 系统数据回调
 static void main_system_data_cb(const char *data, int len) {
     printf("[Main] System monitor data: %.*s\n", len, data);
@@ -91,32 +82,41 @@ static void main_system_data_cb(const char *data, int len) {
 
 // 主程序入口
 int main(int argc, char *argv[]) {
+    mesh_mode_t mode = MODE_UNKNOWN;
+    mesh_core_t *core;
+    
     // 解析命令行参数
-    if (parse_arguments(argc, argv) != 0) {
+    if (parse_arguments(argc, argv, &mode) != 0) {
         return 1;
     }
-    // 初始化 libuv 事件循环
-    loop = uv_default_loop();
-    // 初始化WiFi和系统监控
-    wifi_monitor_init(&wifi_monitor, loop);
-    wifi_monitor_set_callback(main_wifi_data_cb);
-    system_monitor_init(&system_monitor, loop);
-    system_monitor_set_callback(main_system_data_cb);
-    // 根据模式初始化对应模块
-    if (current_mode == MODE_CONTROLLER) {
-        if (mqtt_controller_init(loop) != 0) {
-            printf("Failed to init MQTT controller\n");
-            return 1;
-        }
-        printf("Mesh controller started\n");
-    } else if (current_mode == MODE_AGENT) {
-        if (mqtt_agent_init(loop) != 0) {
-            printf("Failed to init MQTT agent\n");
-            return 1;
-        }
-        printf("Mesh agent started\n");
+    
+    // 获取mesh核心实例
+    core = mesh_core_get_instance();
+    
+    // 初始化mesh核心
+    if (mesh_core_init(core, mode) != 0) {
+        printf("Failed to initialize mesh core\n");
+        return 1;
     }
+    
+    // 设置回调函数
+    mesh_core_set_wifi_callback(core, main_wifi_data_cb);
+    mesh_core_set_system_callback(core, main_system_data_cb);
+    
+    // 启动mesh核心
+    if (mesh_core_start(core) != 0) {
+        printf("Failed to start mesh core\n");
+        mesh_core_cleanup(core);
+        return 1;
+    }
+    
+    printf("Mesh %s started\n", (mode == MODE_CONTROLLER) ? "controller" : "agent");
+    
     // 启动事件循环
-    uv_run(loop, UV_RUN_DEFAULT);
+    uv_run(core->loop, UV_RUN_DEFAULT);
+    
+    // 清理资源
+    mesh_core_cleanup(core);
+    
     return 0;
 } 
