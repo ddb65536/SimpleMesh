@@ -100,8 +100,8 @@ int main(int argc, char *argv[]) {
     }
     
     // 设置回调函数
-    mesh_core_set_wifi_callback(core, main_wifi_data_cb);
-    mesh_core_set_system_callback(core, main_system_data_cb);
+    // mesh_core_set_wifi_callback(core, main_wifi_data_cb);
+    // mesh_core_set_system_callback(core, main_system_data_cb);
     
     // 启动mesh核心
     if (mesh_core_start(core) != 0) {

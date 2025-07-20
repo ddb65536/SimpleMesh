@@ -12,27 +12,38 @@
  * Agent上线流程：
  * 1. 监听CONTROLLER_NOTIFY消息：当控制器广播通知时，Agent会收到此消息
  * 2. 解析控制器ID：从JSON消息中提取controller_id字段
- * 3. 检查重复登录：遍历mesh_node数组，避免重复登录同一控制器
- * 4. 记录控制器信息：将新发现的控制器信息存储到mesh_node数组中
+ * 3. 检查重复登录：在哈希表中查找是否已存在该控制器
+ * 4. 记录控制器信息：将新发现的控制器信息存储到哈希表中
  * 5. 发送登录消息：向控制器发送login消息，建立连接
  * 
  * 关键数据结构：
- * - mesh_node[64]：存储最多64个节点的信息
- * - mesh_node_t结构体包含：mesh_id(18字节)、role(角色)、status(状态)
+ * - nodes：哈希表存储所有节点信息
+ * - mesh_node_info_t结构体包含：mesh_id、role、status等信息
  * 
  * 状态管理：
  * - 新登录的节点状态设置为"online"
  * - 后续可通过心跳检查更新状态为"offline"
  * 
  * 防重复机制：
- * - 通过遍历mesh_node数组检查是否已存在相同mesh_id的节点
+ * - 通过哈希表快速查找是否已存在相同mesh_id的节点
  * - 避免向同一控制器重复发送login消息
  * 
  * 扩展性设计：
- * - 支持最多64个节点的管理
+ * - 动态内存分配，不限制节点数量
  * - mesh_id预留18字节，可存储br-lan的MAC地址
  * - 为后续心跳检查功能预留接口
  */
+static uv_timer_t discover_timer;
+static int discover_stopped = 0;
+
+static void on_discover_timer(uv_timer_t* handle) {
+    mesh_core_t *core = mesh_core_get_instance();
+    if (!core || !core->mosq) return;
+    const char *payload = "{\"type\":\"discover\"}";
+    mosquitto_publish(core->mosq, NULL, MESH_TOPIC_DISCOVER, strlen(payload), payload, 1, false);
+    printf("[Agent] Sent discover message\n");
+}
+
 static void agent_message_cb(struct mosquitto *mosq, void *userdata, const struct mosquitto_message *msg) {
     mesh_core_t *core = (mesh_core_t *)userdata;
     
@@ -58,41 +69,35 @@ static void agent_message_cb(struct mosquitto *mosq, void *userdata, const struc
             }
             
             // 检查是否已经登录到该控制器
-            int already_logged_in = 0;
-            for (int i = 0; i < 64; i++) {
-                if (core->mesh_node[i].mesh_id[0] != '\0' && 
-                    strcmp(core->mesh_node[i].mesh_id, controller_id) == 0) {
-                    already_logged_in = 1;
-                    break;
-                }
-            }
+            mesh_node_info_t *existing_node = mesh_node_find(core, controller_id);
             
             // 只向未登录的controller login
-            if (!already_logged_in) {
-                // 找到空闲位置存储新的控制器信息
-                int free_index = -1;
-                for (int i = 0; i < 64; i++) {
-                    if (core->mesh_node[i].mesh_id[0] == '\0') {
-                        free_index = i;
-                        break;
+            if (!existing_node) {
+                // 添加新的控制器节点
+                if (mesh_node_add(core, controller_id, 0, 0) == 0) {  // band和rssi暂时设为0
+                    // 更新节点角色
+                    mesh_node_info_t *node = mesh_node_find(core, controller_id);
+                    if (node) {
+                        node->role = MODE_CONTROLLER;
                     }
+                    
+                    // 发送登录消息
+                    char login_payload[256];
+                    snprintf(login_payload, sizeof(login_payload),
+                        "{\"node_id\":\"mesh_agent\",\"timestamp\":%ld,\"target_controller\":\"%s\"}",
+                        time(NULL), controller_id);
+                    mosquitto_publish(mosq, NULL, MESH_TOPIC_LOGIN,
+                        strlen(login_payload), login_payload, 1, false);
+                    printf("[Agent] Sent login to controller: %s\n", controller_id);
                 }
-                
-                if (free_index != -1) {
-                    strncpy(core->mesh_node[free_index].mesh_id, controller_id, sizeof(core->mesh_node[free_index].mesh_id)-1);
-                    core->mesh_node[free_index].role = MODE_CONTROLLER;
-                    strcpy(core->mesh_node[free_index].status, "online");
-                }
-                
-                char login_payload[256];
-                snprintf(login_payload, sizeof(login_payload),
-                    "{\"node_id\":\"mesh_agent\",\"timestamp\":%ld,\"target_controller\":\"%s\"}",
-                    time(NULL), controller_id);
-                mosquitto_publish(mosq, NULL, MESH_TOPIC_LOGIN,
-                    strlen(login_payload), login_payload, 1, false);
-                printf("[Agent] Sent login to controller: %s\n", controller_id);
             } else {
                 printf("[Agent] Already logged in to controller: %s, skip login.\n", controller_id);
+            }
+            // 停止定时器
+            if (!discover_stopped) {
+                uv_timer_stop(&discover_timer);
+                discover_stopped = 1;
+                printf("[Agent] Stopped discover timer after receiving CONTROLLER_NOTIFY\n");
             }
         }
     }
@@ -109,6 +114,10 @@ int mqtt_agent_init(uv_loop_t *loop) {
     // 设置消息回调
     mosquitto_message_callback_set(core->mosq, agent_message_cb);
     
+    // 启动定时器，每10秒发一次discover
+    uv_timer_init(loop, &discover_timer);
+    uv_timer_start(&discover_timer, on_discover_timer, 0, 10000);
+
     printf("[Agent] MQTT agent initialized.\n");
     return 0;
 } 

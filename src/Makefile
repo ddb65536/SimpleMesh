@@ -6,6 +6,7 @@ CFLAGS += -Wall -Wextra -std=c99
 CFLAGS += -D_GNU_SOURCE
 CFLAGS += -DSIMPLE_MESH_VERSION=\"1.0.0\"
 
+
 LIBS += -luv -lmosquitto
 
 .PHONY: all clean
